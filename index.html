@@ -496,14 +496,68 @@
             
             // Process jump data and calculate jump height
             function processJumpData() {
-                // Find peak velocity for impulse-momentum method
+                // First, find the minimum acceleration point after initial peak
+                // This typically indicates the transition from loading to takeoff
+                let initialPeakAccel = GRAVITY;
+                let initialPeakIndex = 0;
+                
+                // Find an initial acceleration peak (loading phase)
+                for (let i = 0; i < Math.min(accelerationData.length, accelerationData.length / 2); i++) {
+                    if (accelerationData[i] > initialPeakAccel) {
+                        initialPeakAccel = accelerationData[i];
+                        initialPeakIndex = i;
+                    }
+                }
+                
+                // Find the minimum acceleration after the initial peak (unweighting phase)
+                let minAccel = accelerationData[initialPeakIndex];
+                let minAccelIndex = initialPeakIndex;
+                
+                for (let i = initialPeakIndex; i < accelerationData.length; i++) {
+                    if (accelerationData[i] < minAccel) {
+                        minAccel = accelerationData[i];
+                        minAccelIndex = i;
+                    }
+                    
+                    // Break if we find a significant increase again (likely landing)
+                    if (i > initialPeakIndex + 10 && accelerationData[i] > GRAVITY * 1.5) {
+                        break;
+                    }
+                }
+                
+                // Now find peak velocity in the concentric phase
+                // We'll look between initialPeakIndex and minAccelIndex
                 let peakVelocity = 0;
                 let peakVelocityIndex = 0;
                 
-                for (let i = 0; i < velocityData.length; i++) {
+                // Default to searching the entire range if we can't identify phases
+                let searchStartIndex = 0;
+                let searchEndIndex = velocityData.length;
+                
+                // If we found valid start and end points for concentric phase
+                if (initialPeakIndex < minAccelIndex) {
+                    searchStartIndex = initialPeakIndex;
+                    // Look a bit beyond minAccelIndex to ensure we capture the actual takeoff
+                    searchEndIndex = Math.min(minAccelIndex + 15, velocityData.length);
+                }
+                
+                // Find peak velocity in the identified range
+                for (let i = searchStartIndex; i < searchEndIndex; i++) {
                     if (velocityData[i] > peakVelocity) {
                         peakVelocity = velocityData[i];
                         peakVelocityIndex = i;
+                    }
+                }
+                
+                // Validate our findings - if peak velocity is too low, search whole range
+                if (peakVelocity < 0.5) {
+                    console.log("Low peak velocity found in concentric phase, searching full range");
+                    peakVelocity = 0;
+                    for (let i = 0; i < velocityData.length; i++) {
+                        if (velocityData[i] > peakVelocity) {
+                            peakVelocity = velocityData[i];
+                            peakVelocityIndex = i;
+                        }
                     }
                 }
                 
@@ -518,8 +572,10 @@
                 statusEl.textContent = "Jump analysis complete!";
                 
                 // Add annotation for peak velocity
-                if (chart && timestamps.length > 0) {
-                    const peakVelTimeRel = (timestamps[peakVelocityIndex] - timestamps[0]) / 1000;
+                if (chart && timestamps.length > 0 && peakVelocityIndex < timestamps.length) {
+                    // Create time array relative to start time
+                    const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
+                    const peakVelTimeRel = timeInSeconds[peakVelocityIndex];
                     
                     // Clear existing annotations
                     chart.options.plugins.annotation.annotations = {};
@@ -538,9 +594,41 @@
                         }
                     };
                     
+                    // Add annotation for initial acceleration peak (optional)
+                    if (initialPeakIndex < timestamps.length) {
+                        chart.options.plugins.annotation.annotations.initialPeakLine = {
+                            type: 'line',
+                            xMin: timeInSeconds[initialPeakIndex],
+                            xMax: timeInSeconds[initialPeakIndex],
+                            borderColor: 'rgba(75, 192, 192, 0.8)',
+                            borderWidth: 2,
+                            label: {
+                                content: 'Loading Peak',
+                                enabled: true,
+                                position: 'bottom'
+                            }
+                        };
+                    }
+                    
+                    // Add annotation for minimum acceleration (optional)
+                    if (minAccelIndex < timestamps.length) {
+                        chart.options.plugins.annotation.annotations.minAccelLine = {
+                            type: 'line',
+                            xMin: timeInSeconds[minAccelIndex],
+                            xMax: timeInSeconds[minAccelIndex],
+                            borderColor: 'rgba(153, 102, 255, 0.8)',
+                            borderWidth: 2,
+                            label: {
+                                content: 'Unweighting',
+                                enabled: true,
+                                position: 'bottom'
+                            }
+                        };
+                    }
+                    
                     chart.update();
                     
-                    // Ensure the velocity chart is shown
+                    // Ensure the appropriate chart is shown
                     switchChartMode('velocity');
                 }
             }
