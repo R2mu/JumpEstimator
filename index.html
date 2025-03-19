@@ -214,6 +214,34 @@
                     <td id="jumpHeight">-</td>
                 </tr>
             </table>
+            
+            <h3>Jump Phases (Debug Info)</h3>
+            <table>
+                <tr>
+                    <th>Phase</th>
+                    <th>Time (s)</th>
+                    <th>Index</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Loading Peak</td>
+                    <td id="loadingTime">-</td>
+                    <td id="loadingIndex">-</td>
+                    <td id="loadingValue">-</td>
+                </tr>
+                <tr>
+                    <td>Unweighting</td>
+                    <td id="unweightingTime">-</td>
+                    <td id="unweightingIndex">-</td>
+                    <td id="unweightingValue">-</td>
+                </tr>
+                <tr>
+                    <td>Peak Velocity</td>
+                    <td id="peakVelTime">-</td>
+                    <td id="peakVelIndex">-</td>
+                    <td id="peakVelValue">-</td>
+                </tr>
+            </table>
         </div>
     </div>
 
@@ -269,6 +297,9 @@
             
             // Initialize chart
             function initChart() {
+                // Register the annotation plugin if not registered
+                Chart.register(ChartAnnotation);
+                
                 chart = new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -304,7 +335,8 @@
                                 annotations: {}
                             }
                         }
-                    }
+                    },
+                    plugins: [ChartAnnotation]
                 });
             }
             
@@ -496,6 +528,20 @@
             
             // Process jump data and calculate jump height
             function processJumpData() {
+                // Reference debug elements
+                const loadingTimeEl = document.getElementById('loadingTime');
+                const loadingIndexEl = document.getElementById('loadingIndex');
+                const loadingValueEl = document.getElementById('loadingValue');
+                const unweightingTimeEl = document.getElementById('unweightingTime');
+                const unweightingIndexEl = document.getElementById('unweightingIndex');
+                const unweightingValueEl = document.getElementById('unweightingValue');
+                const peakVelTimeEl = document.getElementById('peakVelTime');
+                const peakVelIndexEl = document.getElementById('peakVelIndex');
+                const peakVelValueEl = document.getElementById('peakVelValue');
+                
+                // Create time array relative to start time
+                const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
+                
                 // First, find the minimum acceleration point after initial peak
                 // This typically indicates the transition from loading to takeoff
                 let initialPeakAccel = GRAVITY;
@@ -561,6 +607,25 @@
                     }
                 }
                 
+                // Fill debug info
+                if (initialPeakIndex < timeInSeconds.length) {
+                    loadingTimeEl.textContent = timeInSeconds[initialPeakIndex].toFixed(3);
+                    loadingIndexEl.textContent = initialPeakIndex;
+                    loadingValueEl.textContent = accelerationData[initialPeakIndex].toFixed(2);
+                }
+                
+                if (minAccelIndex < timeInSeconds.length) {
+                    unweightingTimeEl.textContent = timeInSeconds[minAccelIndex].toFixed(3);
+                    unweightingIndexEl.textContent = minAccelIndex;
+                    unweightingValueEl.textContent = accelerationData[minAccelIndex].toFixed(2);
+                }
+                
+                if (peakVelocityIndex < timeInSeconds.length) {
+                    peakVelTimeEl.textContent = timeInSeconds[peakVelocityIndex].toFixed(3);
+                    peakVelIndexEl.textContent = peakVelocityIndex;
+                    peakVelValueEl.textContent = peakVelocity.toFixed(2);
+                }
+                
                 // Calculate jump height using impulse-momentum method (v²/2g)
                 const jumpHeightImpulse = Math.pow(peakVelocity, 2) / (2 * GRAVITY);
                 
@@ -571,66 +636,81 @@
                 // Update status
                 statusEl.textContent = "Jump analysis complete!";
                 
-                // Add annotation for peak velocity
-                if (chart && timestamps.length > 0 && peakVelocityIndex < timestamps.length) {
-                    // Create time array relative to start time
-                    const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
-                    const peakVelTimeRel = timeInSeconds[peakVelocityIndex];
-                    
+                // Try a completely different approach for chart annotations
+                try {
                     // Clear existing annotations
                     chart.options.plugins.annotation.annotations = {};
                     
-                    // Add annotation for peak velocity
-                    chart.options.plugins.annotation.annotations.peakVelocityLine = {
-                        type: 'line',
-                        xMin: peakVelTimeRel,
-                        xMax: peakVelTimeRel,
-                        borderColor: 'rgba(255, 99, 132, 0.8)',
-                        borderWidth: 2,
-                        label: {
-                            content: 'Peak Velocity',
-                            enabled: true,
-                            position: 'top'
+                    console.log("Debug - Peak velocity time:", timeInSeconds[peakVelocityIndex]);
+                    
+                    // Use direct x-value approach for annotations
+                    chart.options.plugins.annotation = {
+                        annotations: {
+                            peakVelocityLine: {
+                                type: 'line',
+                                scaleID: 'x',
+                                value: timeInSeconds[peakVelocityIndex],
+                                borderColor: 'rgba(255, 99, 132, 0.8)',
+                                borderWidth: 2,
+                                label: {
+                                    content: 'Peak Velocity',
+                                    enabled: true,
+                                    position: 'top'
+                                }
+                            },
+                            initialPeakLine: {
+                                type: 'line',
+                                scaleID: 'x',
+                                value: timeInSeconds[initialPeakIndex],
+                                borderColor: 'rgba(75, 192, 192, 0.8)',
+                                borderWidth: 2,
+                                label: {
+                                    content: 'Loading Peak',
+                                    enabled: true,
+                                    position: 'bottom'
+                                }
+                            },
+                            minAccelLine: {
+                                type: 'line',
+                                scaleID: 'x',
+                                value: timeInSeconds[minAccelIndex],
+                                borderColor: 'rgba(153, 102, 255, 0.8)',
+                                borderWidth: 2,
+                                label: {
+                                    content: 'Unweighting',
+                                    enabled: true,
+                                    position: 'bottom'
+                                }
+                            }
                         }
                     };
                     
-                    // Add annotation for initial acceleration peak (optional)
-                    if (initialPeakIndex < timestamps.length) {
-                        chart.options.plugins.annotation.annotations.initialPeakLine = {
-                            type: 'line',
-                            xMin: timeInSeconds[initialPeakIndex],
-                            xMax: timeInSeconds[initialPeakIndex],
-                            borderColor: 'rgba(75, 192, 192, 0.8)',
-                            borderWidth: 2,
-                            label: {
-                                content: 'Loading Peak',
-                                enabled: true,
-                                position: 'bottom'
-                            }
-                        };
-                    }
-                    
-                    // Add annotation for minimum acceleration (optional)
-                    if (minAccelIndex < timestamps.length) {
-                        chart.options.plugins.annotation.annotations.minAccelLine = {
-                            type: 'line',
-                            xMin: timeInSeconds[minAccelIndex],
-                            xMax: timeInSeconds[minAccelIndex],
-                            borderColor: 'rgba(153, 102, 255, 0.8)',
-                            borderWidth: 2,
-                            label: {
-                                content: 'Unweighting',
-                                enabled: true,
-                                position: 'bottom'
-                            }
-                        };
-                    }
-                    
                     chart.update();
                     
-                    // Ensure the appropriate chart is shown
-                    switchChartMode('velocity');
+                    // If still not working, try another format
+                    if (chart.options.plugins.annotation.annotations.peakVelocityLine.value === undefined) {
+                        chart.options.plugins.annotation = {
+                            annotations: [{
+                                type: 'line',
+                                scaleID: 'x',
+                                value: timeInSeconds[peakVelocityIndex],
+                                borderColor: 'rgba(255, 99, 132, 0.8)',
+                                borderWidth: 2,
+                                label: {
+                                    content: 'Peak Velocity',
+                                    enabled: true,
+                                    position: 'top'
+                                }
+                            }]
+                        };
+                        chart.update();
+                    }
+                } catch (error) {
+                    console.error("Error setting annotations:", error);
                 }
+                
+                // Ensure the appropriate chart is shown
+                switchChartMode('velocity');
             }
             
             // Reset the app
