@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Vertical Jump Height Measurement</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        button {
+            padding: 12px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            min-width: 120px;
+            transition: background-color 0.3s;
+        }
+        
+        #startBtn {
+            background-color: #27ae60;
+            color: white;
+        }
+        
+        #stopBtn {
+            background-color: #e74c3c;
+            color: white;
+            display: none;
+        }
+        
+        #resetBtn {
+            background-color: #3498db;
+            color: white;
+            display: none;
+        }
+        
+        #status {
+            text-align: center;
+            font-weight: bold;
+            min-height: 24px;
+        }
+        
+        .chart-container {
+            height: 300px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+        }
+        
+        .results {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 5px solid #3498db;
+        }
+        
+        .results h2 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        
+        table th, table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        table th {
+            background-color: #f2f2f2;
+        }
+        
+        .instruction {
+            background-color: #fff8e1;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 5px solid #ffc107;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 600px) {
+            button {
+                padding: 10px 15px;
+                font-size: 14px;
+                min-width: 100px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Vertical Jump Height Measurement</h1>
+    
+    <div class="container">
+        <div class="instruction">
+            <h3>Instructions:</h3>
+            <ol>
+                <li>Press the START button and place the phone in your pocket or hold it firmly</li>
+                <li>Stand still for 2 seconds</li>
+                <li>Perform your vertical jump</li>
+                <li>After landing and standing still, press the STOP button</li>
+                <li>View your results below</li>
+            </ol>
+        </div>
+        
+        <div id="status">Ready to measure</div>
+        
+        <div class="button-group">
+            <button id="startBtn">START</button>
+            <button id="stopBtn">STOP</button>
+            <button id="resetBtn">RESET</button>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="accelerationChart"></canvas>
+        </div>
+        
+        <div class="results">
+            <h2>Jump Results</h2>
+            <table>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                </tr>
+                <tr>
+                    <td>Flight Time</td>
+                    <td id="flightTime">-</td>
+                </tr>
+                <tr>
+                    <td>Jump Height</td>
+                    <td id="jumpHeight">-</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Elements
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const resetBtn = document.getElementById('resetBtn');
+            const statusEl = document.getElementById('status');
+            const flightTimeEl = document.getElementById('flightTime');
+            const jumpHeightEl = document.getElementById('jumpHeight');
+            const ctx = document.getElementById('accelerationChart').getContext('2d');
+            
+            // Variables
+            let accelerometer = null;
+            let recording = false;
+            let accelerationData = [];
+            let timestamps = [];
+            let takeoffTime = null;
+            let landingTime = null;
+            let chart;
+            
+            // Constants
+            const GRAVITY = 9.81; // m/s^2
+            const SAMPLE_RATE = 60; // Hz
+            const TAKEOFF_THRESHOLD = 2; // Acceleration threshold to detect takeoff
+            const LANDING_THRESHOLD = 18; // Acceleration threshold to detect landing
+            const STABLE_DURATION = 500; // ms to wait for stabilization
+            
+            // Function to check if device sensors are available
+            function checkSensorAvailability() {
+                if ('DeviceMotionEvent' in window) {
+                    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                        // iOS 13+ requires permission
+                        statusEl.textContent = "Click START to request sensor access";
+                    } else {
+                        // Non-iOS devices or older iOS
+                        statusEl.textContent = "Ready to measure";
+                    }
+                } else {
+                    statusEl.textContent = "Device motion not supported on this device";
+                    startBtn.disabled = true;
+                }
+            }
+            
+            // Initialize chart
+            function initChart() {
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Vertical Acceleration (m/s²)',
+                            data: [],
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Time (s)'
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Acceleration (m/s²)'
+                                }
+                            }
+                        },
+                        animation: false
+                    }
+                });
+            }
+            
+            // Update chart with new data
+            function updateChart() {
+                if (!chart) return;
+                
+                const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
+                
+                chart.data.labels = timeInSeconds;
+                chart.data.datasets[0].data = accelerationData;
+                chart.update();
+            }
+            
+            // Start recording
+            function startRecording() {
+                // Clear previous data
+                accelerationData = [];
+                timestamps = [];
+                takeoffTime = null;
+                landingTime = null;
+                flightTimeEl.textContent = "-";
+                jumpHeightEl.textContent = "-";
+                
+                // Update UI
+                statusEl.textContent = "Recording... Stand still, then jump";
+                startBtn.style.display = "none";
+                stopBtn.style.display = "inline-block";
+                resetBtn.style.display = "none";
+                
+                // Initialize or reset the chart
+                if (chart) {
+                    chart.data.labels = [];
+                    chart.data.datasets[0].data = [];
+                    chart.update();
+                } else {
+                    initChart();
+                }
+                
+                recording = true;
+                
+                // Start listening to accelerometer
+                window.addEventListener('devicemotion', handleMotion);
+            }
+            
+            // Handle motion data
+            function handleMotion(event) {
+                if (!recording) return;
+                
+                // Get acceleration data
+                const acceleration = event.accelerationIncludingGravity;
+                
+                // Convert to m/s^2 and account for device orientation
+                // Note: This is simplified and assumes the phone is held in a consistent orientation
+                // For a more robust solution, you'd use device orientation to transform coordinates
+                let verticalAccel = Math.sqrt(
+                    Math.pow(acceleration.x || 0, 2) + 
+                    Math.pow(acceleration.y || 0, 2) + 
+                    Math.pow(acceleration.z || 0, 2)
+                );
+                
+                // Store data
+                accelerationData.push(verticalAccel);
+                timestamps.push(Date.now());
+                
+                // Update chart occasionally (not every frame to avoid performance issues)
+                if (timestamps.length % 10 === 0) {
+                    updateChart();
+                }
+                
+                // Simple jump detection algorithm
+                // This is a basic implementation and might need refinement
+                const dataLength = accelerationData.length;
+                
+                if (dataLength > 10 && !takeoffTime) {
+                    // Look for takeoff - sudden drop in acceleration
+                    const recentAccel = accelerationData.slice(-5);
+                    const avgAccel = recentAccel.reduce((a, b) => a + b, 0) / recentAccel.length;
+                    
+                    if (avgAccel < GRAVITY - TAKEOFF_THRESHOLD) {
+                        takeoffTime = timestamps[timestamps.length - 3]; // Adjust for reaction time
+                        statusEl.textContent = "Takeoff detected...";
+                    }
+                }
+                
+                if (takeoffTime && !landingTime && timestamps[timestamps.length - 1] - takeoffTime > 100) {
+                    // Look for landing - sudden spike in acceleration
+                    const recentAccel = accelerationData.slice(-3);
+                    const avgAccel = recentAccel.reduce((a, b) => a + b, 0) / recentAccel.length;
+                    
+                    if (avgAccel > GRAVITY + LANDING_THRESHOLD) {
+                        landingTime = timestamps[timestamps.length - 3]; // Adjust for reaction time
+                        statusEl.textContent = "Landing detected! Press STOP to finish";
+                    }
+                }
+            }
+            
+            // Stop recording
+            function stopRecording() {
+                recording = false;
+                window.removeEventListener('devicemotion', handleMotion);
+                
+                // Update UI
+                statusEl.textContent = "Processing results...";
+                stopBtn.style.display = "none";
+                resetBtn.style.display = "inline-block";
+                
+                // Finalize chart
+                updateChart();
+                
+                // Calculate results
+                calculateResults();
+            }
+            
+            // Calculate jump metrics
+            function calculateResults() {
+                if (takeoffTime && landingTime) {
+                    // Calculate flight time in seconds
+                    const flightTimeMs = landingTime - takeoffTime;
+                    const flightTimeSec = flightTimeMs / 1000;
+                    
+                    // Calculate jump height using flight time method
+                    // h = (g * t²) / 8
+                    const jumpHeightMeters = (GRAVITY * Math.pow(flightTimeSec, 2)) / 8;
+                    
+                    // Display results
+                    flightTimeEl.textContent = `${flightTimeSec.toFixed(3)} s`;
+                    jumpHeightEl.textContent = `${(jumpHeightMeters * 100).toFixed(1)} cm`;
+                    
+                    // Update status
+                    statusEl.textContent = "Jump analysis complete!";
+                    
+                    // Mark takeoff and landing on chart
+                    if (chart && timestamps.length > 0) {
+                        const takeoffIndex = timestamps.findIndex(t => t >= takeoffTime);
+                        const landingIndex = timestamps.findIndex(t => t >= landingTime);
+                        
+                        if (takeoffIndex !== -1 && landingIndex !== -1) {
+                            // Add annotations to chart
+                            chart.options.plugins.annotation = {
+                                annotations: {
+                                    takeoffLine: {
+                                        type: 'line',
+                                        xMin: (takeoffTime - timestamps[0]) / 1000,
+                                        xMax: (takeoffTime - timestamps[0]) / 1000,
+                                        borderColor: 'rgba(255, 99, 132, 0.8)',
+                                        borderWidth: 2,
+                                        label: {
+                                            content: 'Takeoff',
+                                            enabled: true
+                                        }
+                                    },
+                                    landingLine: {
+                                        type: 'line',
+                                        xMin: (landingTime - timestamps[0]) / 1000,
+                                        xMax: (landingTime - timestamps[0]) / 1000,
+                                        borderColor: 'rgba(54, 162, 235, 0.8)',
+                                        borderWidth: 2,
+                                        label: {
+                                            content: 'Landing',
+                                            enabled: true
+                                        }
+                                    }
+                                }
+                            };
+                            chart.update();
+                        }
+                    }
+                } else {
+                    // No jump detected
+                    statusEl.textContent = "No clear jump detected. Try again.";
+                    flightTimeEl.textContent = "N/A";
+                    jumpHeightEl.textContent = "N/A";
+                }
+            }
+            
+            // Reset the app
+            function resetApp() {
+                // Clear data
+                accelerationData = [];
+                timestamps = [];
+                takeoffTime = null;
+                landingTime = null;
+                
+                // Update UI
+                flightTimeEl.textContent = "-";
+                jumpHeightEl.textContent = "-";
+                statusEl.textContent = "Ready to measure";
+                startBtn.style.display = "inline-block";
+                stopBtn.style.display = "none";
+                resetBtn.style.display = "none";
+                
+                // Reset chart
+                if (chart) {
+                    chart.data.labels = [];
+                    chart.data.datasets[0].data = [];
+                    chart.options.plugins.annotation = null;
+                    chart.update();
+                }
+            }
+            
+            // Event listeners
+            startBtn.addEventListener('click', function() {
+                // Request permission for iOS 13+ devices
+                if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                    DeviceMotionEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                startRecording();
+                            } else {
+                                statusEl.textContent = "Permission to access sensors was denied";
+                            }
+                        })
+                        .catch(err => {
+                            statusEl.textContent = "Error requesting sensor permission: " + err;
+                        });
+                } else {
+                    // Non-iOS or older iOS devices
+                    startRecording();
+                }
+            });
+            
+            stopBtn.addEventListener('click', stopRecording);
+            resetBtn.addEventListener('click', resetApp);
+            
+            // Initialize
+            checkSensorAvailability();
+        });
+    </script>
+</body>
+</html>
