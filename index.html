@@ -195,7 +195,7 @@
         </div>
         
         <div class="chart-container">
-            <canvas id="accelerationChart"></canvas>
+            <canvas id="jumpChart"></canvas>
         </div>
         
         <div class="results">
@@ -206,20 +206,12 @@
                     <th>Value</th>
                 </tr>
                 <tr>
-                    <td>Flight Time</td>
-                    <td id="flightTime">-</td>
-                </tr>
-                <tr>
-                    <td>Jump Height (Flight Time)</td>
-                    <td id="jumpHeight">-</td>
-                </tr>
-                <tr>
                     <td>Peak Velocity</td>
                     <td id="peakVelocity">-</td>
                 </tr>
                 <tr>
-                    <td>Jump Height (Impulse-Momentum)</td>
-                    <td id="jumpHeightImpulse">-</td>
+                    <td>Jump Height</td>
+                    <td id="jumpHeight">-</td>
                 </tr>
             </table>
         </div>
@@ -236,14 +228,12 @@
             const stopBtn = document.getElementById('stopBtn');
             const resetBtn = document.getElementById('resetBtn');
             const statusEl = document.getElementById('status');
-            const flightTimeEl = document.getElementById('flightTime');
-            const jumpHeightEl = document.getElementById('jumpHeight');
             const peakVelocityEl = document.getElementById('peakVelocity');
-            const jumpHeightImpulseEl = document.getElementById('jumpHeightImpulse');
+            const jumpHeightEl = document.getElementById('jumpHeight');
             const bodyWeightInput = document.getElementById('bodyWeight');
             const accelChartBtn = document.getElementById('accelChartBtn');
             const velocityChartBtn = document.getElementById('velocityChartBtn');
-            const ctx = document.getElementById('accelerationChart').getContext('2d');
+            const ctx = document.getElementById('jumpChart').getContext('2d');
             
             // Variables
             let accelerometer = null;
@@ -251,21 +241,14 @@
             let isCollectingData = false;
             let accelerationData = [];
             let velocityData = [];
-            let displacementData = [];
             let timestamps = [];
-            let takeoffTime = null;
-            let landingTime = null;
             let chart = null;
             let startCollectingTimeout = null;
             let currentChartMode = 'acceleration'; // 'acceleration' or 'velocity'
             
             // Constants
             const GRAVITY = 9.81; // m/s^2
-            const SAMPLE_RATE = 60; // Hz
-            const TAKEOFF_THRESHOLD = 2; // Acceleration threshold to detect takeoff
-            const LANDING_THRESHOLD = 18; // Acceleration threshold to detect landing
             const STABLE_DURATION = 2000; // ms to wait before starting data collection
-            const LOW_ACCELERATION_THRESHOLD = 3; // Threshold to consider as "in air" (m/s²)
             const SMOOTHING_WINDOW = 5; // Number of samples for rolling average
             
             // Function to check if device sensors are available
@@ -378,14 +361,11 @@
                 // Clear previous data
                 accelerationData = [];
                 velocityData = [];
-                displacementData = [];
                 timestamps = [];
-                takeoffTime = null;
-                landingTime = null;
-                flightTimeEl.textContent = "-";
-                jumpHeightEl.textContent = "-";
+                
+                // Clear results
                 peakVelocityEl.textContent = "-";
-                jumpHeightImpulseEl.textContent = "-";
+                jumpHeightEl.textContent = "-";
                 
                 // Update UI
                 statusEl.textContent = "Initializing... Stand still for 2 seconds";
@@ -480,23 +460,6 @@
                 return velocity;
             }
             
-            // Calculate displacement from velocity data
-            function calculateDisplacement(velData, timeData) {
-                const displacement = [0]; // Initial displacement is 0
-                
-                for (let i = 1; i < velData.length; i++) {
-                    // Time step in seconds
-                    const dt = (timeData[i] - timeData[i-1]) / 1000;
-                    
-                    // Trapezoidal integration: s(t+dt) = s(t) + (v(t) + v(t+dt))/2 * dt
-                    const velAvg = (velData[i] + velData[i-1]) / 2;
-                    const s = displacement[i-1] + velAvg * dt;
-                    displacement.push(s);
-                }
-                
-                return displacement;
-            }
-            
             // Stop recording
             function stopRecording() {
                 recording = false;
@@ -520,10 +483,9 @@
                 const smoothedData = smoothData(accelerationData, SMOOTHING_WINDOW);
                 accelerationData = smoothedData;
                 
-                // Calculate velocity and displacement
+                // Calculate velocity
                 velocityData = calculateVelocity(accelerationData, timestamps);
                 velocityData = smoothData(velocityData, SMOOTHING_WINDOW); // Smooth velocity
-                displacementData = calculateDisplacement(velocityData, timestamps);
                 
                 // Finalize chart
                 updateChart();
@@ -532,7 +494,7 @@
                 processJumpData();
             }
             
-            // Process jump data and detect takeoff/landing
+            // Process jump data and calculate jump height
             function processJumpData() {
                 // Find peak velocity for impulse-momentum method
                 let peakVelocity = 0;
@@ -545,181 +507,41 @@
                     }
                 }
                 
-                // Find the concentric peak (takeoff preparation)
-                let maxAccel = GRAVITY;
-                let maxAccelIndex = 0;
+                // Calculate jump height using impulse-momentum method (v²/2g)
+                const jumpHeightImpulse = Math.pow(peakVelocity, 2) / (2 * GRAVITY);
                 
-                // Find the landing peak
-                let landingPeak = GRAVITY;
-                let landingPeakIndex = 0;
+                // Display results
+                peakVelocityEl.textContent = `${peakVelocity.toFixed(2)} m/s`;
+                jumpHeightEl.textContent = `${(jumpHeightImpulse * 100).toFixed(1)} cm`;
                 
-                // First find concentric phase peak (usually comes first)
-                for (let i = 0; i < Math.min(accelerationData.length, accelerationData.length / 2); i++) {
-                    if (accelerationData[i] > maxAccel) {
-                        maxAccel = accelerationData[i];
-                        maxAccelIndex = i;
-                    }
-                }
+                // Update status
+                statusEl.textContent = "Jump analysis complete!";
                 
-                // Then find landing phase peak (usually comes later)
-                for (let i = Math.max(maxAccelIndex + 10, accelerationData.length / 2); i < accelerationData.length; i++) {
-                    if (accelerationData[i] > landingPeak) {
-                        landingPeak = accelerationData[i];
-                        landingPeakIndex = i;
-                    }
-                }
-                
-                // Mark "in air" phase by setting low acceleration values to zero
-                // This helps with clearer identification of takeoff and landing
-                for (let i = maxAccelIndex; i < landingPeakIndex; i++) {
-                    if (accelerationData[i] < LOW_ACCELERATION_THRESHOLD) {
-                        accelerationData[i] = 0;
-                    }
-                }
-                
-                // Update chart with modified data
-                updateChart();
-                
-                // Find takeoff point (searching forward from concentric peak)
-                let takeoffIndex = -1;
-                for (let i = maxAccelIndex; i < accelerationData.length - 1; i++) {
-                    if (accelerationData[i] <= LOW_ACCELERATION_THRESHOLD && accelerationData[i+1] <= LOW_ACCELERATION_THRESHOLD) {
-                        takeoffIndex = i;
-                        break;
-                    }
-                }
-                
-                // Find landing point (searching backward from landing peak)
-                let landingIndex = -1;
-                for (let i = landingPeakIndex; i > takeoffIndex; i--) {
-                    if (accelerationData[i] <= LOW_ACCELERATION_THRESHOLD && accelerationData[i-1] <= LOW_ACCELERATION_THRESHOLD) {
-                        landingIndex = i;
-                        break;
-                    }
-                }
-                
-                // If we found valid takeoff and landing points
-                if (takeoffIndex !== -1 && landingIndex !== -1 && takeoffIndex < landingIndex) {
-                    takeoffTime = timestamps[takeoffIndex];
-                    landingTime = timestamps[landingIndex];
+                // Add annotation for peak velocity
+                if (chart && timestamps.length > 0) {
+                    const peakVelTimeRel = (timestamps[peakVelocityIndex] - timestamps[0]) / 1000;
                     
-                    // Calculate results using both methods
-                    calculateResults(peakVelocity);
-                } else {
-                    // Fallback to more basic approach if peak detection failed
-                    findTakeoffAndLandingBasic(peakVelocity);
-                }
-            }
-            
-            // Basic takeoff and landing detection as a fallback
-            function findTakeoffAndLandingBasic(peakVelocity) {
-                for (let i = 10; i < accelerationData.length - 10; i++) {
-                    // Detect sudden drop in acceleration (takeoff)
-                    if (!takeoffTime) {
-                        const before = accelerationData.slice(i-5, i).reduce((a, b) => a + b, 0) / 5;
-                        const after = accelerationData.slice(i, i+5).reduce((a, b) => a + b, 0) / 5;
-                        
-                        if (before > GRAVITY && after < GRAVITY - TAKEOFF_THRESHOLD) {
-                            takeoffTime = timestamps[i];
+                    // Clear existing annotations
+                    chart.options.plugins.annotation.annotations = {};
+                    
+                    // Add annotation for peak velocity
+                    chart.options.plugins.annotation.annotations.peakVelocityLine = {
+                        type: 'line',
+                        xMin: peakVelTimeRel,
+                        xMax: peakVelTimeRel,
+                        borderColor: 'rgba(255, 99, 132, 0.8)',
+                        borderWidth: 2,
+                        label: {
+                            content: 'Peak Velocity',
+                            enabled: true,
+                            position: 'top'
                         }
-                    }
+                    };
                     
-                    // Detect sudden increase in acceleration (landing)
-                    if (takeoffTime && !landingTime && timestamps[i] - takeoffTime > 100) {
-                        const before = accelerationData.slice(i-3, i).reduce((a, b) => a + b, 0) / 3;
-                        const current = accelerationData[i];
-                        
-                        if (before < GRAVITY && current > GRAVITY + LANDING_THRESHOLD) {
-                            landingTime = timestamps[i-1]; // Adjust timing for impact
-                            break;
-                        }
-                    }
-                }
-                
-                // Calculate results with what we found
-                calculateResults(peakVelocity);
-            }
-            
-            // Calculate jump metrics
-            function calculateResults(peakVelocity) {
-                if (takeoffTime && landingTime && takeoffTime < landingTime) {
-                    // Calculate flight time in seconds
-                    const flightTimeMs = landingTime - takeoffTime;
-                    const flightTimeSec = flightTimeMs / 1000;
+                    chart.update();
                     
-                    // Calculate jump height using flight time method
-                    // h = (g * t²) / 8
-                    const jumpHeightMeters = (GRAVITY * Math.pow(flightTimeSec, 2)) / 8;
-                    
-                    // Calculate jump height using impulse-momentum method (v²/2g)
-                    const jumpHeightImpulse = Math.pow(peakVelocity, 2) / (2 * GRAVITY);
-                    
-                    // Display results
-                    flightTimeEl.textContent = `${flightTimeSec.toFixed(3)} s`;
-                    jumpHeightEl.textContent = `${(jumpHeightMeters * 100).toFixed(1)} cm`;
-                    peakVelocityEl.textContent = `${peakVelocity.toFixed(2)} m/s`;
-                    jumpHeightImpulseEl.textContent = `${(jumpHeightImpulse * 100).toFixed(1)} cm`;
-                    
-                    // Update status
-                    statusEl.textContent = "Jump analysis complete!";
-                    
-                    // Mark takeoff and landing on chart
-                    if (chart && timestamps.length > 0) {
-                        const takeoffTimeRel = (takeoffTime - timestamps[0]) / 1000;
-                        const landingTimeRel = (landingTime - timestamps[0]) / 1000;
-                        
-                        // Find peak velocity time
-                        const peakVelIndex = velocityData.indexOf(Math.max(...velocityData));
-                        const peakVelTime = timestamps[peakVelIndex];
-                        const peakVelTimeRel = (peakVelTime - timestamps[0]) / 1000;
-                        
-                        // Add annotations to chart
-                        chart.options.plugins.annotation = {
-                            annotations: {
-                                takeoffLine: {
-                                    type: 'line',
-                                    xMin: takeoffTimeRel,
-                                    xMax: takeoffTimeRel,
-                                    borderColor: 'rgba(255, 99, 132, 0.8)',
-                                    borderWidth: 2,
-                                    label: {
-                                        content: 'Takeoff',
-                                        enabled: true
-                                    }
-                                },
-                                landingLine: {
-                                    type: 'line',
-                                    xMin: landingTimeRel,
-                                    xMax: landingTimeRel,
-                                    borderColor: 'rgba(54, 162, 235, 0.8)',
-                                    borderWidth: 2,
-                                    label: {
-                                        content: 'Landing',
-                                        enabled: true
-                                    }
-                                },
-                                peakVelocityLine: {
-                                    type: 'line',
-                                    xMin: peakVelTimeRel,
-                                    xMax: peakVelTimeRel,
-                                    borderColor: 'rgba(75, 192, 192, 0.8)',
-                                    borderWidth: 2,
-                                    label: {
-                                        content: 'Peak Velocity',
-                                        enabled: true
-                                    }
-                                }
-                            }
-                        };
-                        chart.update();
-                    }
-                } else {
-                    // No jump detected
-                    statusEl.textContent = "No clear jump detected. Try again.";
-                    flightTimeEl.textContent = "N/A";
-                    jumpHeightEl.textContent = "N/A";
-                    peakVelocityEl.textContent = "N/A";
-                    jumpHeightImpulseEl.textContent = "N/A";
+                    // Ensure the velocity chart is shown
+                    switchChartMode('velocity');
                 }
             }
             
@@ -728,10 +550,7 @@
                 // Clear data
                 accelerationData = [];
                 velocityData = [];
-                displacementData = [];
                 timestamps = [];
-                takeoffTime = null;
-                landingTime = null;
                 isCollectingData = false;
                 
                 if (startCollectingTimeout) {
@@ -739,10 +558,8 @@
                 }
                 
                 // Update UI
-                flightTimeEl.textContent = "-";
-                jumpHeightEl.textContent = "-";
                 peakVelocityEl.textContent = "-";
-                jumpHeightImpulseEl.textContent = "-";
+                jumpHeightEl.textContent = "-";
                 statusEl.textContent = "Ready to measure";
                 startBtn.style.display = "inline-block";
                 stopBtn.style.display = "none";
