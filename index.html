@@ -173,6 +173,15 @@
                 <li>After landing and standing still, press the STOP button</li>
                 <li>View your results below</li>
             </ol>
+            <div id="mouseInstructions" style="margin-top: 10px; display: none; background-color: #e3f2fd; padding: 10px; border-radius: 5px;">
+                <h4 style="margin-top: 0;">Mouse Simulation Mode:</h4>
+                <ol>
+                    <li>Press START to begin simulation</li>
+                    <li>Move your mouse <strong>down</strong> then quickly <strong>up</strong> to simulate the countermovement and jump</li>
+                    <li>The faster you move the mouse upward, the higher the simulated jump</li>
+                    <li>Press STOP when done</li>
+                </ol>
+            </div>
         </div>
         
         <div class="weight-input">
@@ -358,6 +367,38 @@
                     chart.options.scales.y.title.text = 'Velocity (m/s)';
                 }
                 
+                // Update point markers if they exist
+                if (chart.data.datasets.length > 1) {
+                    const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
+                    
+                    // Update each marker point based on the current chart mode
+                    for (let i = 1; i < chart.data.datasets.length; i++) {
+                        if (chart.data.datasets[i].data && chart.data.datasets[i].data.length > 0) {
+                            // Get the x-value (time) from the point
+                            const xValue = chart.data.datasets[i].data[0].x;
+                            
+                            // Find the closest index to this time value
+                            let closestIndex = 0;
+                            let minDiff = Number.MAX_VALUE;
+                            
+                            for (let j = 0; j < timeInSeconds.length; j++) {
+                                const diff = Math.abs(timeInSeconds[j] - xValue);
+                                if (diff < minDiff) {
+                                    minDiff = diff;
+                                    closestIndex = j;
+                                }
+                            }
+                            
+                            // Update the y-value based on the current mode
+                            if (currentChartMode === 'acceleration') {
+                                chart.data.datasets[i].data[0].y = accelerationData[closestIndex];
+                            } else {
+                                chart.data.datasets[i].data[0].y = velocityData[closestIndex];
+                            }
+                        }
+                    }
+                }
+                
                 chart.update();
             }
             
@@ -495,7 +536,12 @@
                 if (startCollectingTimeout) {
                     clearTimeout(startCollectingTimeout);
                 }
+                
+                // Clean up event listeners
                 window.removeEventListener('devicemotion', handleMotion);
+                
+                // Clean up mouse simulation if active
+                cleanupMouseSimulation();
                 
                 // Update UI
                 statusEl.textContent = "Processing results...";
@@ -632,77 +678,83 @@
                 // Update status
                 statusEl.textContent = "Jump analysis complete!";
                 
-                // Use a simpler approach for chart annotations with vertical lines
+                // Use points instead of vertical lines for annotations
                 try {
-                    // Create a simplified line annotation
-                    const createLine = (index, color, label, yPosition) => {
-                        if (index >= timeInSeconds.length) return null;
-                        
-                        return {
-                            type: 'line',
-                            yMin: 'bottom',
-                            yMax: 'top',
-                            xMin: timeInSeconds[index],
-                            xMax: timeInSeconds[index],
-                            borderColor: color,
-                            borderWidth: 2,
-                            label: {
-                                content: label,
-                                enabled: true,
-                                position: yPosition,
-                                backgroundColor: color,
-                                color: 'white',
-                                padding: {
-                                    top: 4,
-                                    bottom: 4,
-                                    left: 6,
-                                    right: 6
-                                }
-                            }
-                        };
-                    };
+                    // Clean up any old datasets first
+                    chart.data.datasets = chart.data.datasets.slice(0, 1); // Keep only the first dataset
                     
-                    // Clear existing annotations
-                    chart.options.plugins.annotation.annotations = {};
+                    // Add points for key events based on current chart mode
+                    let pointsData = [];
                     
-                    // Add peak velocity line
-                    chart.options.plugins.annotation.annotations.peakVelocityLine = 
-                        createLine(peakVelocityIndex, 'rgba(255, 99, 132, 0.8)', 'Peak Velocity', 'top');
-                        
-                    // Add loading peak line
-                    chart.options.plugins.annotation.annotations.loadingPeakLine = 
-                        createLine(initialPeakIndex, 'rgba(75, 192, 192, 0.8)', 'Loading Peak', 'bottom');
-                        
-                    // Add unweighting line
-                    chart.options.plugins.annotation.annotations.unweightingLine = 
-                        createLine(minAccelIndex, 'rgba(153, 102, 255, 0.8)', 'Unweighting', 'bottom');
-                    
-                    // Force chart update
-                    chart.update();
-                    
-                    // Add a special marker at the peak velocity point
-                    const peakVelPoint = {
-                        x: timeInSeconds[peakVelocityIndex],
-                        y: velocityData[peakVelocityIndex]
-                    };
-                    
-                    // Add a highlight point dataset for peak velocity
-                    if (currentChartMode === 'velocity') {
-                        chart.data.datasets.push({
-                            label: 'Peak Point',
-                            data: [peakVelPoint],
-                            backgroundColor: 'red',
-                            borderColor: 'red',
-                            pointRadius: 5,
-                            pointHoverRadius: 7,
+                    // Create point for peak velocity
+                    if (peakVelocityIndex < timeInSeconds.length) {
+                        pointsData.push({
+                            label: 'Peak Velocity',
+                            data: [{
+                                x: timeInSeconds[peakVelocityIndex],
+                                y: currentChartMode === 'velocity' ? 
+                                   velocityData[peakVelocityIndex] : 
+                                   accelerationData[peakVelocityIndex]
+                            }],
+                            backgroundColor: 'rgba(255, 99, 132, 1)',
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            pointRadius: 8,
+                            pointStyle: 'circle',
                             showLine: false
                         });
-                        chart.update();
+                        
+                        // Add a text annotation for peak velocity
+                        statusEl.textContent = `Jump analysis complete! Peak velocity at ${timeInSeconds[peakVelocityIndex].toFixed(2)}s`;
                     }
                     
+                    // Create point for loading peak
+                    if (initialPeakIndex < timeInSeconds.length) {
+                        pointsData.push({
+                            label: 'Loading Peak',
+                            data: [{
+                                x: timeInSeconds[initialPeakIndex],
+                                y: currentChartMode === 'velocity' ? 
+                                   velocityData[initialPeakIndex] : 
+                                   accelerationData[initialPeakIndex]
+                            }],
+                            backgroundColor: 'rgba(75, 192, 192, 1)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            pointRadius: 6,
+                            pointStyle: 'triangle',
+                            showLine: false
+                        });
+                    }
+                    
+                    // Create point for unweighting
+                    if (minAccelIndex < timeInSeconds.length) {
+                        pointsData.push({
+                            label: 'Unweighting',
+                            data: [{
+                                x: timeInSeconds[minAccelIndex],
+                                y: currentChartMode === 'velocity' ? 
+                                   velocityData[minAccelIndex] : 
+                                   accelerationData[minAccelIndex]
+                            }],
+                            backgroundColor: 'rgba(153, 102, 255, 1)',
+                            borderColor: 'rgba(153, 102, 255, 1)',
+                            pointRadius: 6,
+                            pointStyle: 'rectRounded',
+                            showLine: false
+                        });
+                    }
+                    
+                    // Add datasets to chart
+                    chart.data.datasets = chart.data.datasets.concat(pointsData);
+                    
+                    // Clear any existing annotations
+                    chart.options.plugins.annotation.annotations = {};
+                    
+                    // Update the chart
+                    chart.update();
+                    
                 } catch (error) {
-                    console.error("Error setting annotations:", error);
-                    statusEl.textContent += " (Annotation error: " + error.message + ")";
+                    console.error("Error setting point markers:", error);
+                    statusEl.textContent += " (Marker error: " + error.message + ")";
                 }
                 
                 // Ensure the appropriate chart is shown
@@ -721,27 +773,130 @@
                     clearTimeout(startCollectingTimeout);
                 }
                 
+                // Clean up mouse simulation if active
+                cleanupMouseSimulation();
+                
+                // Reset mouse tracking variables
+                mouseY = 0;
+                prevMouseY = 0;
+                mouseVelocity = 0;
+                
                 // Update UI
                 peakVelocityEl.textContent = "-";
                 jumpHeightEl.textContent = "-";
-                statusEl.textContent = "Ready to measure";
+                
+                // Reset debug info if it exists
+                if (document.getElementById('loadingTime')) {
+                    document.getElementById('loadingTime').textContent = "-";
+                    document.getElementById('loadingIndex').textContent = "-";
+                    document.getElementById('loadingValue').textContent = "-";
+                    document.getElementById('unweightingTime').textContent = "-";
+                    document.getElementById('unweightingIndex').textContent = "-";
+                    document.getElementById('unweightingValue').textContent = "-";
+                    document.getElementById('peakVelTime').textContent = "-";
+                    document.getElementById('peakVelIndex').textContent = "-";
+                    document.getElementById('peakVelValue').textContent = "-";
+                }
+                
+                // Update status based on mode
+                if (useMouseSimulation) {
+                    statusEl.textContent = "Ready to measure (mouse simulation)";
+                } else {
+                    statusEl.textContent = "Ready to measure";
+                }
+                
+                // Update button display
                 startBtn.style.display = "inline-block";
                 stopBtn.style.display = "none";
                 resetBtn.style.display = "none";
                 
-                // Reset chart
+                // Completely reinitialize the chart
                 if (chart) {
-                    chart.data.labels = [];
-                    chart.data.datasets[0].data = [];
-                    if (chart.options.plugins && chart.options.plugins.annotation) {
-                        chart.options.plugins.annotation.annotations = {};
+                    chart.destroy();
+                    chart = null;
+                    initChart();
+                }
+            }
+            
+            // Flag to enable mouse simulation mode
+            let useMouseSimulation = false;
+            
+            // Mouse simulation variables
+            let mouseY = 0;
+            let prevMouseY = 0;
+            let mouseVelocity = 0;
+            let mouseSimulationInterval = null;
+            
+            // Function to check if we're running on a desktop browser
+            function isDesktopBrowser() {
+                return !('ontouchstart' in window) || navigator.maxTouchPoints <= 0;
+            }
+            
+            // Check if we should enable mouse simulation by default on desktop
+            if (isDesktopBrowser()) {
+                useMouseSimulation = true;
+                const modeText = document.createElement('div');
+                modeText.style.textAlign = 'center';
+                modeText.style.color = '#e74c3c';
+                modeText.style.fontWeight = 'bold';
+                modeText.style.marginBottom = '10px';
+                modeText.textContent = '⚠️ DESKTOP TESTING MODE: Using mouse to simulate accelerometer ⚠️';
+                document.querySelector('.container').insertBefore(modeText, document.querySelector('.instruction'));
+                
+                // Show mouse instructions
+                document.getElementById('mouseInstructions').style.display = 'block';
+            }
+            
+            // Function to simulate accelerometer with mouse
+            function setupMouseSimulation() {
+                // Add mouse move listener to the document
+                document.addEventListener('mousemove', function(event) {
+                    // Get current mouse Y position
+                    mouseY = event.clientY;
+                });
+                
+                // Start the simulation interval
+                mouseSimulationInterval = setInterval(function() {
+                    if (!recording || !isCollectingData) return;
+                    
+                    // Calculate velocity from mouse movement
+                    mouseVelocity = (prevMouseY - mouseY) * 0.5; // Scaling factor
+                    
+                    // Calculate simulated acceleration from velocity change
+                    const accel = Math.abs(mouseVelocity * 2) + GRAVITY;
+                    
+                    // Store data
+                    accelerationData.push(accel);
+                    timestamps.push(Date.now());
+                    
+                    // Update chart occasionally
+                    if (timestamps.length % 3 === 0) {
+                        updateChart();
                     }
-                    chart.update();
+                    
+                    // Update previous position
+                    prevMouseY = mouseY;
+                }, 50); // 20 Hz sampling rate for simulation
+            }
+            
+            // Function to clean up mouse simulation
+            function cleanupMouseSimulation() {
+                if (mouseSimulationInterval) {
+                    clearInterval(mouseSimulationInterval);
+                    mouseSimulationInterval = null;
                 }
             }
             
             // Event listeners
             startBtn.addEventListener('click', function() {
+                // If mouse simulation is enabled, use that instead of real accelerometer
+                if (useMouseSimulation) {
+                    startRecording();
+                    setupMouseSimulation();
+                    statusEl.textContent = "Using mouse simulation. Move mouse up quickly to simulate jump.";
+                    return;
+                }
+                
                 // Request permission for iOS 13+ devices
                 if (typeof DeviceMotionEvent.requestPermission === 'function') {
                     DeviceMotionEvent.requestPermission()
