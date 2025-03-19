@@ -178,18 +178,22 @@
             // Variables
             let accelerometer = null;
             let recording = false;
+            let isCollectingData = false;
             let accelerationData = [];
             let timestamps = [];
             let takeoffTime = null;
             let landingTime = null;
             let chart;
+            let startCollectingTimeout = null;
             
             // Constants
             const GRAVITY = 9.81; // m/s^2
             const SAMPLE_RATE = 60; // Hz
             const TAKEOFF_THRESHOLD = 2; // Acceleration threshold to detect takeoff
             const LANDING_THRESHOLD = 18; // Acceleration threshold to detect landing
-            const STABLE_DURATION = 500; // ms to wait for stabilization
+            const STABLE_DURATION = 2000; // ms to wait before starting data collection
+            const LOW_ACCELERATION_THRESHOLD = 3; // Threshold to consider as "in air" (m/s²)
+            const SMOOTHING_WINDOW = 5; // Number of samples for rolling average
             
             // Function to check if device sensors are available
             function checkSensorAvailability() {
@@ -265,7 +269,7 @@
                 jumpHeightEl.textContent = "-";
                 
                 // Update UI
-                statusEl.textContent = "Recording... Stand still, then jump";
+                statusEl.textContent = "Initializing... Stand still for 2 seconds";
                 startBtn.style.display = "none";
                 stopBtn.style.display = "inline-block";
                 resetBtn.style.display = "none";
@@ -280,14 +284,22 @@
                 }
                 
                 recording = true;
+                isCollectingData = false;
                 
                 // Start listening to accelerometer
                 window.addEventListener('devicemotion', handleMotion);
+                
+                // Wait 2 seconds before actually collecting data
+                startCollectingTimeout = setTimeout(() => {
+                    isCollectingData = true;
+                    statusEl.textContent = "Recording... Perform your jump now";
+                }, STABLE_DURATION);
             }
             
             // Handle motion data
             function handleMotion(event) {
                 if (!recording) return;
+                if (!isCollectingData) return; // Only start collecting after the delay
                 
                 // Get acceleration data
                 const acceleration = event.accelerationIncludingGravity;
@@ -309,37 +321,33 @@
                 if (timestamps.length % 10 === 0) {
                     updateChart();
                 }
-                
-                // Simple jump detection algorithm
-                // This is a basic implementation and might need refinement
-                const dataLength = accelerationData.length;
-                
-                if (dataLength > 10 && !takeoffTime) {
-                    // Look for takeoff - sudden drop in acceleration
-                    const recentAccel = accelerationData.slice(-5);
-                    const avgAccel = recentAccel.reduce((a, b) => a + b, 0) / recentAccel.length;
+            }
+            
+            // Apply smoothing to data using rolling average
+            function smoothData(data, windowSize) {
+                const smoothedData = [];
+                for (let i = 0; i < data.length; i++) {
+                    let sum = 0;
+                    let count = 0;
                     
-                    if (avgAccel < GRAVITY - TAKEOFF_THRESHOLD) {
-                        takeoffTime = timestamps[timestamps.length - 3]; // Adjust for reaction time
-                        statusEl.textContent = "Takeoff detected...";
+                    for (let j = Math.max(0, i - Math.floor(windowSize/2)); 
+                         j <= Math.min(data.length - 1, i + Math.floor(windowSize/2)); j++) {
+                        sum += data[j];
+                        count++;
                     }
-                }
-                
-                if (takeoffTime && !landingTime && timestamps[timestamps.length - 1] - takeoffTime > 100) {
-                    // Look for landing - sudden spike in acceleration
-                    const recentAccel = accelerationData.slice(-3);
-                    const avgAccel = recentAccel.reduce((a, b) => a + b, 0) / recentAccel.length;
                     
-                    if (avgAccel > GRAVITY + LANDING_THRESHOLD) {
-                        landingTime = timestamps[timestamps.length - 3]; // Adjust for reaction time
-                        statusEl.textContent = "Landing detected! Press STOP to finish";
-                    }
+                    smoothedData.push(sum / count);
                 }
+                return smoothedData;
             }
             
             // Stop recording
             function stopRecording() {
                 recording = false;
+                isCollectingData = false;
+                if (startCollectingTimeout) {
+                    clearTimeout(startCollectingTimeout);
+                }
                 window.removeEventListener('devicemotion', handleMotion);
                 
                 // Update UI
@@ -347,16 +355,122 @@
                 stopBtn.style.display = "none";
                 resetBtn.style.display = "inline-block";
                 
+                // Apply smoothing to the acceleration data
+                const smoothedData = smoothData(accelerationData, SMOOTHING_WINDOW);
+                accelerationData = smoothedData;
+                
                 // Finalize chart
                 updateChart();
                 
                 // Calculate results
+                processJumpData();
+            }
+            
+            // Process jump data and detect takeoff/landing
+            function processJumpData() {
+                if (accelerationData.length < 10) {
+                    statusEl.textContent = "Not enough data collected. Try again.";
+                    return;
+                }
+                
+                // Find the concentric peak (takeoff preparation)
+                let maxAccel = GRAVITY;
+                let maxAccelIndex = 0;
+                
+                // Find the landing peak
+                let landingPeak = GRAVITY;
+                let landingPeakIndex = 0;
+                
+                // First find concentric phase peak (usually comes first)
+                for (let i = 0; i < Math.min(accelerationData.length, accelerationData.length / 2); i++) {
+                    if (accelerationData[i] > maxAccel) {
+                        maxAccel = accelerationData[i];
+                        maxAccelIndex = i;
+                    }
+                }
+                
+                // Then find landing phase peak (usually comes later)
+                for (let i = Math.max(maxAccelIndex + 10, accelerationData.length / 2); i < accelerationData.length; i++) {
+                    if (accelerationData[i] > landingPeak) {
+                        landingPeak = accelerationData[i];
+                        landingPeakIndex = i;
+                    }
+                }
+                
+                // Mark "in air" phase by setting low acceleration values to zero
+                // This helps with clearer identification of takeoff and landing
+                for (let i = maxAccelIndex; i < landingPeakIndex; i++) {
+                    if (accelerationData[i] < LOW_ACCELERATION_THRESHOLD) {
+                        accelerationData[i] = 0;
+                    }
+                }
+                
+                // Update chart with modified data
+                updateChart();
+                
+                // Find takeoff point (searching forward from concentric peak)
+                let takeoffIndex = -1;
+                for (let i = maxAccelIndex; i < accelerationData.length - 1; i++) {
+                    if (accelerationData[i] <= LOW_ACCELERATION_THRESHOLD && accelerationData[i+1] <= LOW_ACCELERATION_THRESHOLD) {
+                        takeoffIndex = i;
+                        break;
+                    }
+                }
+                
+                // Find landing point (searching backward from landing peak)
+                let landingIndex = -1;
+                for (let i = landingPeakIndex; i > takeoffIndex; i--) {
+                    if (accelerationData[i] <= LOW_ACCELERATION_THRESHOLD && accelerationData[i-1] <= LOW_ACCELERATION_THRESHOLD) {
+                        landingIndex = i;
+                        break;
+                    }
+                }
+                
+                // If we found valid takeoff and landing points
+                if (takeoffIndex !== -1 && landingIndex !== -1 && takeoffIndex < landingIndex) {
+                    takeoffTime = timestamps[takeoffIndex];
+                    landingTime = timestamps[landingIndex];
+                    
+                    // Calculate results
+                    calculateResults();
+                } else {
+                    // Fallback to more basic approach if peak detection failed
+                    findTakeoffAndLandingBasic();
+                }
+            }
+            
+            // Basic takeoff and landing detection as a fallback
+            function findTakeoffAndLandingBasic() {
+                for (let i = 10; i < accelerationData.length - 10; i++) {
+                    // Detect sudden drop in acceleration (takeoff)
+                    if (!takeoffTime) {
+                        const before = accelerationData.slice(i-5, i).reduce((a, b) => a + b, 0) / 5;
+                        const after = accelerationData.slice(i, i+5).reduce((a, b) => a + b, 0) / 5;
+                        
+                        if (before > GRAVITY && after < GRAVITY - TAKEOFF_THRESHOLD) {
+                            takeoffTime = timestamps[i];
+                        }
+                    }
+                    
+                    // Detect sudden increase in acceleration (landing)
+                    if (takeoffTime && !landingTime && timestamps[i] - takeoffTime > 100) {
+                        const before = accelerationData.slice(i-3, i).reduce((a, b) => a + b, 0) / 3;
+                        const current = accelerationData[i];
+                        
+                        if (before < GRAVITY && current > GRAVITY + LANDING_THRESHOLD) {
+                            landingTime = timestamps[i-1]; // Adjust timing for impact
+                            break;
+                        }
+                    }
+                }
+                
+                // Calculate results with what we found
                 calculateResults();
             }
             
             // Calculate jump metrics
             function calculateResults() {
-                if (takeoffTime && landingTime) {
+                if (takeoffTime && landingTime && takeoffTime < landingTime) {
                     // Calculate flight time in seconds
                     const flightTimeMs = landingTime - takeoffTime;
                     const flightTimeSec = flightTimeMs / 1000;
@@ -374,39 +488,37 @@
                     
                     // Mark takeoff and landing on chart
                     if (chart && timestamps.length > 0) {
-                        const takeoffIndex = timestamps.findIndex(t => t >= takeoffTime);
-                        const landingIndex = timestamps.findIndex(t => t >= landingTime);
+                        const takeoffTimeRel = (takeoffTime - timestamps[0]) / 1000;
+                        const landingTimeRel = (landingTime - timestamps[0]) / 1000;
                         
-                        if (takeoffIndex !== -1 && landingIndex !== -1) {
-                            // Add annotations to chart
-                            chart.options.plugins.annotation = {
-                                annotations: {
-                                    takeoffLine: {
-                                        type: 'line',
-                                        xMin: (takeoffTime - timestamps[0]) / 1000,
-                                        xMax: (takeoffTime - timestamps[0]) / 1000,
-                                        borderColor: 'rgba(255, 99, 132, 0.8)',
-                                        borderWidth: 2,
-                                        label: {
-                                            content: 'Takeoff',
-                                            enabled: true
-                                        }
-                                    },
-                                    landingLine: {
-                                        type: 'line',
-                                        xMin: (landingTime - timestamps[0]) / 1000,
-                                        xMax: (landingTime - timestamps[0]) / 1000,
-                                        borderColor: 'rgba(54, 162, 235, 0.8)',
-                                        borderWidth: 2,
-                                        label: {
-                                            content: 'Landing',
-                                            enabled: true
-                                        }
+                        // Add annotations to chart
+                        chart.options.plugins.annotation = {
+                            annotations: {
+                                takeoffLine: {
+                                    type: 'line',
+                                    xMin: takeoffTimeRel,
+                                    xMax: takeoffTimeRel,
+                                    borderColor: 'rgba(255, 99, 132, 0.8)',
+                                    borderWidth: 2,
+                                    label: {
+                                        content: 'Takeoff',
+                                        enabled: true
+                                    }
+                                },
+                                landingLine: {
+                                    type: 'line',
+                                    xMin: landingTimeRel,
+                                    xMax: landingTimeRel,
+                                    borderColor: 'rgba(54, 162, 235, 0.8)',
+                                    borderWidth: 2,
+                                    label: {
+                                        content: 'Landing',
+                                        enabled: true
                                     }
                                 }
-                            };
-                            chart.update();
-                        }
+                            }
+                        };
+                        chart.update();
                     }
                 } else {
                     // No jump detected
@@ -423,6 +535,11 @@
                 timestamps = [];
                 takeoffTime = null;
                 landingTime = null;
+                isCollectingData = false;
+                
+                if (startCollectingTimeout) {
+                    clearTimeout(startCollectingTimeout);
+                }
                 
                 // Update UI
                 flightTimeEl.textContent = "-";
@@ -436,7 +553,9 @@
                 if (chart) {
                     chart.data.labels = [];
                     chart.data.datasets[0].data = [];
-                    chart.options.plugins.annotation = null;
+                    if (chart.options.plugins && chart.options.plugins.annotation) {
+                        chart.options.plugins.annotation = null;
+                    }
                     chart.update();
                 }
             }
