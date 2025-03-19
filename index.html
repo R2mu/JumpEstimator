@@ -108,11 +108,53 @@
             margin-bottom: 20px;
         }
         
+        .weight-input {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            gap: 10px;
+        }
+        
+        .weight-input label {
+            font-weight: bold;
+        }
+        
+        .weight-input input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 80px;
+        }
+        
+        .chart-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        
+        .chart-toggle button {
+            min-width: auto;
+            padding: 6px 12px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        
+        .chart-toggle button.active {
+            background-color: #3498db;
+            color: white;
+        }
+        
         @media (max-width: 600px) {
             button {
                 padding: 10px 15px;
                 font-size: 14px;
                 min-width: 100px;
+            }
+            
+            .weight-input {
+                flex-direction: column;
+                align-items: flex-start;
             }
         }
     </style>
@@ -124,6 +166,7 @@
         <div class="instruction">
             <h3>Instructions:</h3>
             <ol>
+                <li>Enter your body weight in kg</li>
                 <li>Press the START button and place the phone in your pocket or hold it firmly</li>
                 <li>Stand still for 2 seconds</li>
                 <li>Perform your vertical jump</li>
@@ -132,12 +175,23 @@
             </ol>
         </div>
         
+        <div class="weight-input">
+            <label for="bodyWeight">Body Weight (kg):</label>
+            <input type="number" id="bodyWeight" min="20" max="200" step="0.1" value="70">
+        </div>
+        
         <div id="status">Ready to measure</div>
         
         <div class="button-group">
             <button id="startBtn">START</button>
             <button id="stopBtn">STOP</button>
             <button id="resetBtn">RESET</button>
+        </div>
+        
+        <div class="chart-toggle">
+            <span>View: </span>
+            <button id="accelChartBtn" class="active">Acceleration</button>
+            <button id="velocityChartBtn">Velocity</button>
         </div>
         
         <div class="chart-container">
@@ -156,14 +210,25 @@
                     <td id="flightTime">-</td>
                 </tr>
                 <tr>
-                    <td>Jump Height</td>
+                    <td>Jump Height (Flight Time)</td>
                     <td id="jumpHeight">-</td>
+                </tr>
+                <tr>
+                    <td>Peak Velocity</td>
+                    <td id="peakVelocity">-</td>
+                </tr>
+                <tr>
+                    <td>Jump Height (Impulse-Momentum)</td>
+                    <td id="jumpHeightImpulse">-</td>
                 </tr>
             </table>
         </div>
     </div>
 
+    <!-- Load necessary libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/2.1.0/chartjs-plugin-annotation.min.js"></script>
+    
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Elements
@@ -173,6 +238,11 @@
             const statusEl = document.getElementById('status');
             const flightTimeEl = document.getElementById('flightTime');
             const jumpHeightEl = document.getElementById('jumpHeight');
+            const peakVelocityEl = document.getElementById('peakVelocity');
+            const jumpHeightImpulseEl = document.getElementById('jumpHeightImpulse');
+            const bodyWeightInput = document.getElementById('bodyWeight');
+            const accelChartBtn = document.getElementById('accelChartBtn');
+            const velocityChartBtn = document.getElementById('velocityChartBtn');
             const ctx = document.getElementById('accelerationChart').getContext('2d');
             
             // Variables
@@ -180,11 +250,14 @@
             let recording = false;
             let isCollectingData = false;
             let accelerationData = [];
+            let velocityData = [];
+            let displacementData = [];
             let timestamps = [];
             let takeoffTime = null;
             let landingTime = null;
-            let chart;
+            let chart = null;
             let startCollectingTimeout = null;
+            let currentChartMode = 'acceleration'; // 'acceleration' or 'velocity'
             
             // Constants
             const GRAVITY = 9.81; // m/s^2
@@ -242,9 +315,39 @@
                                 }
                             }
                         },
-                        animation: false
+                        animation: false,
+                        plugins: {
+                            annotation: {
+                                annotations: {}
+                            }
+                        }
                     }
                 });
+            }
+            
+            // Switch between acceleration and velocity charts
+            function switchChartMode(mode) {
+                if (!chart) return;
+                
+                currentChartMode = mode;
+                
+                if (mode === 'acceleration') {
+                    accelChartBtn.classList.add('active');
+                    velocityChartBtn.classList.remove('active');
+                    
+                    chart.data.datasets[0].label = 'Vertical Acceleration (m/s²)';
+                    chart.data.datasets[0].data = accelerationData;
+                    chart.options.scales.y.title.text = 'Acceleration (m/s²)';
+                } else {
+                    accelChartBtn.classList.remove('active');
+                    velocityChartBtn.classList.add('active');
+                    
+                    chart.data.datasets[0].label = 'Vertical Velocity (m/s)';
+                    chart.data.datasets[0].data = velocityData;
+                    chart.options.scales.y.title.text = 'Velocity (m/s)';
+                }
+                
+                chart.update();
             }
             
             // Update chart with new data
@@ -254,19 +357,35 @@
                 const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
                 
                 chart.data.labels = timeInSeconds;
-                chart.data.datasets[0].data = accelerationData;
+                
+                if (currentChartMode === 'acceleration') {
+                    chart.data.datasets[0].data = accelerationData;
+                } else {
+                    chart.data.datasets[0].data = velocityData;
+                }
+                
                 chart.update();
             }
             
             // Start recording
             function startRecording() {
+                // Check if body weight is entered
+                if (!bodyWeightInput.value || isNaN(parseFloat(bodyWeightInput.value))) {
+                    statusEl.textContent = "Please enter your body weight first";
+                    return;
+                }
+                
                 // Clear previous data
                 accelerationData = [];
+                velocityData = [];
+                displacementData = [];
                 timestamps = [];
                 takeoffTime = null;
                 landingTime = null;
                 flightTimeEl.textContent = "-";
                 jumpHeightEl.textContent = "-";
+                peakVelocityEl.textContent = "-";
+                jumpHeightImpulseEl.textContent = "-";
                 
                 // Update UI
                 statusEl.textContent = "Initializing... Stand still for 2 seconds";
@@ -278,6 +397,9 @@
                 if (chart) {
                     chart.data.labels = [];
                     chart.data.datasets[0].data = [];
+                    if (chart.options.plugins && chart.options.plugins.annotation) {
+                        chart.options.plugins.annotation.annotations = {};
+                    }
                     chart.update();
                 } else {
                     initChart();
@@ -306,7 +428,6 @@
                 
                 // Convert to m/s^2 and account for device orientation
                 // Note: This is simplified and assumes the phone is held in a consistent orientation
-                // For a more robust solution, you'd use device orientation to transform coordinates
                 let verticalAccel = Math.sqrt(
                     Math.pow(acceleration.x || 0, 2) + 
                     Math.pow(acceleration.y || 0, 2) + 
@@ -341,6 +462,41 @@
                 return smoothedData;
             }
             
+            // Calculate velocity from acceleration data
+            function calculateVelocity(accelData, timeData) {
+                const velocity = [0]; // Initial velocity is 0
+                
+                for (let i = 1; i < accelData.length; i++) {
+                    // Time step in seconds
+                    const dt = (timeData[i] - timeData[i-1]) / 1000;
+                    
+                    // Trapezoidal integration: v(t+dt) = v(t) + (a(t) + a(t+dt))/2 * dt
+                    // Subtract GRAVITY since we want velocity relative to ground
+                    const accelAvg = (accelData[i] + accelData[i-1]) / 2 - GRAVITY;
+                    const v = velocity[i-1] + accelAvg * dt;
+                    velocity.push(v);
+                }
+                
+                return velocity;
+            }
+            
+            // Calculate displacement from velocity data
+            function calculateDisplacement(velData, timeData) {
+                const displacement = [0]; // Initial displacement is 0
+                
+                for (let i = 1; i < velData.length; i++) {
+                    // Time step in seconds
+                    const dt = (timeData[i] - timeData[i-1]) / 1000;
+                    
+                    // Trapezoidal integration: s(t+dt) = s(t) + (v(t) + v(t+dt))/2 * dt
+                    const velAvg = (velData[i] + velData[i-1]) / 2;
+                    const s = displacement[i-1] + velAvg * dt;
+                    displacement.push(s);
+                }
+                
+                return displacement;
+            }
+            
             // Stop recording
             function stopRecording() {
                 recording = false;
@@ -355,9 +511,19 @@
                 stopBtn.style.display = "none";
                 resetBtn.style.display = "inline-block";
                 
+                if (accelerationData.length < 10) {
+                    statusEl.textContent = "Not enough data collected. Try again.";
+                    return;
+                }
+                
                 // Apply smoothing to the acceleration data
                 const smoothedData = smoothData(accelerationData, SMOOTHING_WINDOW);
                 accelerationData = smoothedData;
+                
+                // Calculate velocity and displacement
+                velocityData = calculateVelocity(accelerationData, timestamps);
+                velocityData = smoothData(velocityData, SMOOTHING_WINDOW); // Smooth velocity
+                displacementData = calculateDisplacement(velocityData, timestamps);
                 
                 // Finalize chart
                 updateChart();
@@ -368,9 +534,15 @@
             
             // Process jump data and detect takeoff/landing
             function processJumpData() {
-                if (accelerationData.length < 10) {
-                    statusEl.textContent = "Not enough data collected. Try again.";
-                    return;
+                // Find peak velocity for impulse-momentum method
+                let peakVelocity = 0;
+                let peakVelocityIndex = 0;
+                
+                for (let i = 0; i < velocityData.length; i++) {
+                    if (velocityData[i] > peakVelocity) {
+                        peakVelocity = velocityData[i];
+                        peakVelocityIndex = i;
+                    }
                 }
                 
                 // Find the concentric peak (takeoff preparation)
@@ -431,16 +603,16 @@
                     takeoffTime = timestamps[takeoffIndex];
                     landingTime = timestamps[landingIndex];
                     
-                    // Calculate results
-                    calculateResults();
+                    // Calculate results using both methods
+                    calculateResults(peakVelocity);
                 } else {
                     // Fallback to more basic approach if peak detection failed
-                    findTakeoffAndLandingBasic();
+                    findTakeoffAndLandingBasic(peakVelocity);
                 }
             }
             
             // Basic takeoff and landing detection as a fallback
-            function findTakeoffAndLandingBasic() {
+            function findTakeoffAndLandingBasic(peakVelocity) {
                 for (let i = 10; i < accelerationData.length - 10; i++) {
                     // Detect sudden drop in acceleration (takeoff)
                     if (!takeoffTime) {
@@ -465,11 +637,11 @@
                 }
                 
                 // Calculate results with what we found
-                calculateResults();
+                calculateResults(peakVelocity);
             }
             
             // Calculate jump metrics
-            function calculateResults() {
+            function calculateResults(peakVelocity) {
                 if (takeoffTime && landingTime && takeoffTime < landingTime) {
                     // Calculate flight time in seconds
                     const flightTimeMs = landingTime - takeoffTime;
@@ -479,9 +651,14 @@
                     // h = (g * t²) / 8
                     const jumpHeightMeters = (GRAVITY * Math.pow(flightTimeSec, 2)) / 8;
                     
+                    // Calculate jump height using impulse-momentum method (v²/2g)
+                    const jumpHeightImpulse = Math.pow(peakVelocity, 2) / (2 * GRAVITY);
+                    
                     // Display results
                     flightTimeEl.textContent = `${flightTimeSec.toFixed(3)} s`;
                     jumpHeightEl.textContent = `${(jumpHeightMeters * 100).toFixed(1)} cm`;
+                    peakVelocityEl.textContent = `${peakVelocity.toFixed(2)} m/s`;
+                    jumpHeightImpulseEl.textContent = `${(jumpHeightImpulse * 100).toFixed(1)} cm`;
                     
                     // Update status
                     statusEl.textContent = "Jump analysis complete!";
@@ -490,6 +667,11 @@
                     if (chart && timestamps.length > 0) {
                         const takeoffTimeRel = (takeoffTime - timestamps[0]) / 1000;
                         const landingTimeRel = (landingTime - timestamps[0]) / 1000;
+                        
+                        // Find peak velocity time
+                        const peakVelIndex = velocityData.indexOf(Math.max(...velocityData));
+                        const peakVelTime = timestamps[peakVelIndex];
+                        const peakVelTimeRel = (peakVelTime - timestamps[0]) / 1000;
                         
                         // Add annotations to chart
                         chart.options.plugins.annotation = {
@@ -515,6 +697,17 @@
                                         content: 'Landing',
                                         enabled: true
                                     }
+                                },
+                                peakVelocityLine: {
+                                    type: 'line',
+                                    xMin: peakVelTimeRel,
+                                    xMax: peakVelTimeRel,
+                                    borderColor: 'rgba(75, 192, 192, 0.8)',
+                                    borderWidth: 2,
+                                    label: {
+                                        content: 'Peak Velocity',
+                                        enabled: true
+                                    }
                                 }
                             }
                         };
@@ -525,6 +718,8 @@
                     statusEl.textContent = "No clear jump detected. Try again.";
                     flightTimeEl.textContent = "N/A";
                     jumpHeightEl.textContent = "N/A";
+                    peakVelocityEl.textContent = "N/A";
+                    jumpHeightImpulseEl.textContent = "N/A";
                 }
             }
             
@@ -532,6 +727,8 @@
             function resetApp() {
                 // Clear data
                 accelerationData = [];
+                velocityData = [];
+                displacementData = [];
                 timestamps = [];
                 takeoffTime = null;
                 landingTime = null;
@@ -544,6 +741,8 @@
                 // Update UI
                 flightTimeEl.textContent = "-";
                 jumpHeightEl.textContent = "-";
+                peakVelocityEl.textContent = "-";
+                jumpHeightImpulseEl.textContent = "-";
                 statusEl.textContent = "Ready to measure";
                 startBtn.style.display = "inline-block";
                 stopBtn.style.display = "none";
@@ -554,7 +753,7 @@
                     chart.data.labels = [];
                     chart.data.datasets[0].data = [];
                     if (chart.options.plugins && chart.options.plugins.annotation) {
-                        chart.options.plugins.annotation = null;
+                        chart.options.plugins.annotation.annotations = {};
                     }
                     chart.update();
                 }
@@ -583,6 +782,15 @@
             
             stopBtn.addEventListener('click', stopRecording);
             resetBtn.addEventListener('click', resetApp);
+            
+            // Chart toggle buttons
+            accelChartBtn.addEventListener('click', function() {
+                switchChartMode('acceleration');
+            });
+            
+            velocityChartBtn.addEventListener('click', function() {
+                switchChartMode('velocity');
+            });
             
             // Initialize
             checkSensorAvailability();
