@@ -584,63 +584,71 @@
                 // Create time array relative to start time
                 const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
                 
-                // First, find the minimum acceleration point after initial peak
-                // This typically indicates the transition from loading to takeoff
-                let initialPeakAccel = GRAVITY;
-                let initialPeakIndex = 0;
+                // IMPROVED DETECTION LOGIC:
+                // 1. Find minimum acceleration (unweighting phase)
+                // 2. Find takeoff point (when acceleration falls below threshold)
+                // 3. Find peak velocity between unweighting and takeoff
                 
-                // Find an initial acceleration peak (loading phase)
-                for (let i = 0; i < Math.min(accelerationData.length, accelerationData.length / 2); i++) {
-                    if (accelerationData[i] > initialPeakAccel) {
-                        initialPeakAccel = accelerationData[i];
-                        initialPeakIndex = i;
-                    }
-                }
+                // Constant for takeoff detection
+                const TAKEOFF_THRESHOLD = 2; // m/s²
                 
-                // Find the minimum acceleration after the initial peak (unweighting phase)
-                let minAccel = accelerationData[initialPeakIndex];
-                let minAccelIndex = initialPeakIndex;
+                // Find minimum acceleration (unweighting phase)
+                let minAccel = accelerationData[0];
+                let minAccelIndex = 0;
                 
-                for (let i = initialPeakIndex; i < accelerationData.length; i++) {
+                // Skip the first few samples to avoid initial noise
+                const startIndex = Math.min(10, Math.floor(accelerationData.length * 0.05));
+                
+                // Search first half of the data for unweighting (min acceleration)
+                const searchEndUnweighting = Math.floor(accelerationData.length * 0.5);
+                for (let i = startIndex; i < searchEndUnweighting; i++) {
                     if (accelerationData[i] < minAccel) {
                         minAccel = accelerationData[i];
                         minAccelIndex = i;
                     }
+                }
+                
+                // Find takeoff point (first point after unweighting where accel < threshold)
+                let takeoffIndex = -1;
+                
+                // Look for takeoff after unweighting
+                for (let i = minAccelIndex + 10; i < accelerationData.length; i++) {
+                    if (accelerationData[i] < TAKEOFF_THRESHOLD) {
+                        takeoffIndex = i;
+                        break;
+                    }
                     
-                    // Break if we find a significant increase again (likely landing)
-                    if (i > initialPeakIndex + 10 && accelerationData[i] > GRAVITY * 1.5) {
+                    // Safety check - if we go too far, break
+                    if (i > minAccelIndex + Math.floor(accelerationData.length * 0.3)) {
                         break;
                     }
                 }
                 
-                // Now find peak velocity in the concentric phase
-                // We'll look between initialPeakIndex and minAccelIndex
+                // If takeoff not found, use a reasonable estimate
+                if (takeoffIndex === -1) {
+                    takeoffIndex = Math.min(minAccelIndex + 30, accelerationData.length - 1);
+                }
+                
+                // Now find peak velocity between unweighting and takeoff
                 let peakVelocity = 0;
                 let peakVelocityIndex = 0;
                 
-                // Default to searching the entire range if we can't identify phases
-                let searchStartIndex = 0;
-                let searchEndIndex = velocityData.length;
+                // Search for peak velocity in the concentric phase
+                const searchStartVelocity = minAccelIndex;
+                const searchEndVelocity = takeoffIndex;
                 
-                // If we found valid start and end points for concentric phase
-                if (initialPeakIndex < minAccelIndex) {
-                    searchStartIndex = initialPeakIndex;
-                    // Look a bit beyond minAccelIndex to ensure we capture the actual takeoff
-                    searchEndIndex = Math.min(minAccelIndex + 15, velocityData.length);
-                }
-                
-                // Find peak velocity in the identified range
-                for (let i = searchStartIndex; i < searchEndIndex; i++) {
-                    if (velocityData[i] > peakVelocity) {
+                for (let i = searchStartVelocity; i < searchEndVelocity; i++) {
+                    if (i < velocityData.length && velocityData[i] > peakVelocity) {
                         peakVelocity = velocityData[i];
                         peakVelocityIndex = i;
                     }
                 }
                 
-                // Validate our findings - if peak velocity is too low, search whole range
+                // If no significant peak velocity found, log and fall back to whole signal search
                 if (peakVelocity < 0.5) {
-                    console.log("Low peak velocity found in concentric phase, searching full range");
-                    peakVelocity = 0;
+                    console.log("No significant peak velocity found in concentric phase");
+                    
+                    // Fall back to searching the whole signal
                     for (let i = 0; i < velocityData.length; i++) {
                         if (velocityData[i] > peakVelocity) {
                             peakVelocity = velocityData[i];
@@ -649,11 +657,22 @@
                     }
                 }
                 
+                // For visualization, find a loading peak (concentric acceleration peak)
+                let loadingPeakIndex = minAccelIndex;
+                let loadingPeakValue = accelerationData[minAccelIndex];
+                
+                for (let i = minAccelIndex; i < takeoffIndex; i++) {
+                    if (accelerationData[i] > loadingPeakValue) {
+                        loadingPeakValue = accelerationData[i];
+                        loadingPeakIndex = i;
+                    }
+                }
+                
                 // Fill debug info
-                if (initialPeakIndex < timeInSeconds.length) {
-                    loadingTimeEl.textContent = timeInSeconds[initialPeakIndex].toFixed(3);
-                    loadingIndexEl.textContent = initialPeakIndex;
-                    loadingValueEl.textContent = accelerationData[initialPeakIndex].toFixed(2);
+                if (loadingPeakIndex < timeInSeconds.length) {
+                    loadingTimeEl.textContent = timeInSeconds[loadingPeakIndex].toFixed(3);
+                    loadingIndexEl.textContent = loadingPeakIndex;
+                    loadingValueEl.textContent = accelerationData[loadingPeakIndex].toFixed(2);
                 }
                 
                 if (minAccelIndex < timeInSeconds.length) {
@@ -708,14 +727,14 @@
                     }
                     
                     // Create point for loading peak
-                    if (initialPeakIndex < timeInSeconds.length) {
+                    if (loadingPeakIndex < timeInSeconds.length) {
                         pointsData.push({
                             label: 'Loading Peak',
                             data: [{
-                                x: timeInSeconds[initialPeakIndex],
+                                x: timeInSeconds[loadingPeakIndex],
                                 y: currentChartMode === 'velocity' ? 
-                                   velocityData[initialPeakIndex] : 
-                                   accelerationData[initialPeakIndex]
+                                   velocityData[loadingPeakIndex] : 
+                                   accelerationData[loadingPeakIndex]
                             }],
                             backgroundColor: 'rgba(75, 192, 192, 1)',
                             borderColor: 'rgba(75, 192, 192, 1)',
@@ -739,6 +758,24 @@
                             borderColor: 'rgba(153, 102, 255, 1)',
                             pointRadius: 6,
                             pointStyle: 'rectRounded',
+                            showLine: false
+                        });
+                    }
+                    
+                    // Create point for takeoff
+                    if (takeoffIndex > 0 && takeoffIndex < timeInSeconds.length) {
+                        pointsData.push({
+                            label: 'Takeoff',
+                            data: [{
+                                x: timeInSeconds[takeoffIndex],
+                                y: currentChartMode === 'velocity' ? 
+                                   velocityData[takeoffIndex] : 
+                                   accelerationData[takeoffIndex]
+                            }],
+                            backgroundColor: 'rgba(255, 159, 64, 1)',
+                            borderColor: 'rgba(255, 159, 64, 1)',
+                            pointRadius: 6,
+                            pointStyle: 'star',
                             showLine: false
                         });
                     }
