@@ -297,9 +297,6 @@
             
             // Initialize chart
             function initChart() {
-                // Register the annotation plugin if not registered
-                Chart.register(ChartAnnotation);
-                
                 chart = new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -335,8 +332,7 @@
                                 annotations: {}
                             }
                         }
-                    },
-                    plugins: [ChartAnnotation]
+                    }
                 });
             }
             
@@ -636,77 +632,77 @@
                 // Update status
                 statusEl.textContent = "Jump analysis complete!";
                 
-                // Try a completely different approach for chart annotations
+                // Use a simpler approach for chart annotations with vertical lines
                 try {
+                    // Create a simplified line annotation
+                    const createLine = (index, color, label, yPosition) => {
+                        if (index >= timeInSeconds.length) return null;
+                        
+                        return {
+                            type: 'line',
+                            yMin: 'bottom',
+                            yMax: 'top',
+                            xMin: timeInSeconds[index],
+                            xMax: timeInSeconds[index],
+                            borderColor: color,
+                            borderWidth: 2,
+                            label: {
+                                content: label,
+                                enabled: true,
+                                position: yPosition,
+                                backgroundColor: color,
+                                color: 'white',
+                                padding: {
+                                    top: 4,
+                                    bottom: 4,
+                                    left: 6,
+                                    right: 6
+                                }
+                            }
+                        };
+                    };
+                    
                     // Clear existing annotations
                     chart.options.plugins.annotation.annotations = {};
                     
-                    console.log("Debug - Peak velocity time:", timeInSeconds[peakVelocityIndex]);
+                    // Add peak velocity line
+                    chart.options.plugins.annotation.annotations.peakVelocityLine = 
+                        createLine(peakVelocityIndex, 'rgba(255, 99, 132, 0.8)', 'Peak Velocity', 'top');
+                        
+                    // Add loading peak line
+                    chart.options.plugins.annotation.annotations.loadingPeakLine = 
+                        createLine(initialPeakIndex, 'rgba(75, 192, 192, 0.8)', 'Loading Peak', 'bottom');
+                        
+                    // Add unweighting line
+                    chart.options.plugins.annotation.annotations.unweightingLine = 
+                        createLine(minAccelIndex, 'rgba(153, 102, 255, 0.8)', 'Unweighting', 'bottom');
                     
-                    // Use direct x-value approach for annotations
-                    chart.options.plugins.annotation = {
-                        annotations: {
-                            peakVelocityLine: {
-                                type: 'line',
-                                scaleID: 'x',
-                                value: timeInSeconds[peakVelocityIndex],
-                                borderColor: 'rgba(255, 99, 132, 0.8)',
-                                borderWidth: 2,
-                                label: {
-                                    content: 'Peak Velocity',
-                                    enabled: true,
-                                    position: 'top'
-                                }
-                            },
-                            initialPeakLine: {
-                                type: 'line',
-                                scaleID: 'x',
-                                value: timeInSeconds[initialPeakIndex],
-                                borderColor: 'rgba(75, 192, 192, 0.8)',
-                                borderWidth: 2,
-                                label: {
-                                    content: 'Loading Peak',
-                                    enabled: true,
-                                    position: 'bottom'
-                                }
-                            },
-                            minAccelLine: {
-                                type: 'line',
-                                scaleID: 'x',
-                                value: timeInSeconds[minAccelIndex],
-                                borderColor: 'rgba(153, 102, 255, 0.8)',
-                                borderWidth: 2,
-                                label: {
-                                    content: 'Unweighting',
-                                    enabled: true,
-                                    position: 'bottom'
-                                }
-                            }
-                        }
-                    };
-                    
+                    // Force chart update
                     chart.update();
                     
-                    // If still not working, try another format
-                    if (chart.options.plugins.annotation.annotations.peakVelocityLine.value === undefined) {
-                        chart.options.plugins.annotation = {
-                            annotations: [{
-                                type: 'line',
-                                scaleID: 'x',
-                                value: timeInSeconds[peakVelocityIndex],
-                                borderColor: 'rgba(255, 99, 132, 0.8)',
-                                borderWidth: 2,
-                                label: {
-                                    content: 'Peak Velocity',
-                                    enabled: true,
-                                    position: 'top'
-                                }
-                            }]
-                        };
+                    // Add a special marker at the peak velocity point
+                    const peakVelPoint = {
+                        x: timeInSeconds[peakVelocityIndex],
+                        y: velocityData[peakVelocityIndex]
+                    };
+                    
+                    // Add a highlight point dataset for peak velocity
+                    if (currentChartMode === 'velocity') {
+                        chart.data.datasets.push({
+                            label: 'Peak Point',
+                            data: [peakVelPoint],
+                            backgroundColor: 'red',
+                            borderColor: 'red',
+                            pointRadius: 5,
+                            pointHoverRadius: 7,
+                            showLine: false
+                        });
                         chart.update();
                     }
+                    
                 } catch (error) {
                     console.error("Error setting annotations:", error);
+                    statusEl.textContent += " (Annotation error: " + error.message + ")";
                 }
                 
                 // Ensure the appropriate chart is shown
