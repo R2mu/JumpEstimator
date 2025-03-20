@@ -515,15 +515,40 @@
             function calculateVelocity(accelData, timeData) {
                 const velocity = [0]; // Initial velocity is 0
                 
+                // First, calculate actual sampling rate from timestamp data
+                let totalSamplingRate = 0;
+                let sampleCount = 0;
+                
+                for (let i = 1; i < timeData.length; i++) {
+                    const dt = (timeData[i] - timeData[i-1]);
+                    if (dt > 0) {
+                        totalSamplingRate += 1000 / dt; // Convert ms to Hz
+                        sampleCount++;
+                    }
+                }
+                
+                // Calculate average sampling rate
+                const avgSamplingRate = sampleCount > 0 ? totalSamplingRate / sampleCount : 60;
+                console.log(`Detected average sampling rate: ${avgSamplingRate.toFixed(2)} Hz`);
+                
+                // Display sampling rate in status for debugging
+                statusEl.textContent = `Detected sampling rate: ${avgSamplingRate.toFixed(2)} Hz`;
+                
+                // Use actual time differences for velocity calculation
                 for (let i = 1; i < accelData.length; i++) {
-                    // Time step in seconds
+                    // Time step in seconds (using actual time difference)
                     const dt = (timeData[i] - timeData[i-1]) / 1000;
                     
-                    // Trapezoidal integration: v(t+dt) = v(t) + (a(t) + a(t+dt))/2 * dt
-                    // Subtract GRAVITY since we want velocity relative to ground
-                    const accelAvg = (accelData[i] + accelData[i-1]) / 2 - GRAVITY;
-                    const v = velocity[i-1] + accelAvg * dt;
-                    velocity.push(v);
+                    if (dt > 0) { // Avoid division by zero
+                        // Trapezoidal integration: v(t+dt) = v(t) + (a(t) + a(t+dt))/2 * dt
+                        // Subtract GRAVITY since we want velocity relative to ground
+                        const accelAvg = (accelData[i] + accelData[i-1]) / 2 - GRAVITY;
+                        const v = velocity[i-1] + accelAvg * dt;
+                        velocity.push(v);
+                    } else {
+                        // If time difference is zero, duplicate previous velocity
+                        velocity.push(velocity[i-1]);
+                    }
                 }
                 
                 return velocity;
@@ -583,6 +608,22 @@
                 
                 // Create time array relative to start time
                 const timeInSeconds = timestamps.map(t => (t - timestamps[0]) / 1000);
+                
+                // First, calculate actual sampling rate from timestamp data
+                let totalSamplingRate = 0;
+                let sampleCount = 0;
+                
+                for (let i = 1; i < timestamps.length; i++) {
+                    const dt = (timestamps[i] - timestamps[i-1]);
+                    if (dt > 0) {
+                        totalSamplingRate += 1000 / dt; // Convert ms to Hz
+                        sampleCount++;
+                    }
+                }
+                
+                // Calculate average sampling rate
+                const avgSamplingRate = sampleCount > 0 ? totalSamplingRate / sampleCount : 60;
+                console.log(`Detected average sampling rate: ${avgSamplingRate.toFixed(2)} Hz`);
                 
                 // IMPROVED DETECTION LOGIC:
                 // 1. Find minimum acceleration (unweighting phase)
@@ -696,8 +737,8 @@
                 peakVelocityEl.textContent = `${peakVelocity.toFixed(2)} m/s`;
                 jumpHeightEl.textContent = `${(jumpHeightImpulse * 100).toFixed(1)} cm`;
                 
-                // Update status
-                statusEl.textContent = "Jump analysis complete!";
+                // Update status with sampling rate and peak velocity
+                statusEl.textContent = `Jump analysis complete! Sampling rate: ${avgSamplingRate.toFixed(2)} Hz, Peak velocity: ${peakVelocity.toFixed(2)} m/s`;
                 
                 // Use points instead of vertical lines for annotations
                 try {
@@ -723,9 +764,6 @@
                             pointStyle: 'circle',
                             showLine: false
                         });
-                        
-                        // Add a text annotation for peak velocity
-                        statusEl.textContent = `Jump analysis complete! Peak velocity at ${timeInSeconds[peakVelocityIndex].toFixed(2)}s`;
                     }
                     
                     // Create point for loading peak
