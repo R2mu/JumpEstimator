@@ -586,21 +586,17 @@
                 
                 // IMPROVED DETECTION LOGIC:
                 // 1. Find minimum acceleration (unweighting phase)
-                // 2. Find takeoff point (when acceleration falls below threshold)
+                // 2. Find takeoff as global minimum after initial peak
                 // 3. Find peak velocity between unweighting and takeoff
-                
-                // Constant for takeoff detection
-                const TAKEOFF_THRESHOLD = 2; // m/s²
-                
-                // Find minimum acceleration (unweighting phase)
-                let minAccel = accelerationData[0];
-                let minAccelIndex = 0;
                 
                 // Skip the first few samples to avoid initial noise
                 const startIndex = Math.min(10, Math.floor(accelerationData.length * 0.05));
                 
-                // Search first half of the data for unweighting (min acceleration)
-                const searchEndUnweighting = Math.floor(accelerationData.length * 0.5);
+                // Find minimum acceleration (unweighting phase) in first half
+                let minAccel = accelerationData[startIndex];
+                let minAccelIndex = startIndex;
+                
+                const searchEndUnweighting = Math.floor(accelerationData.length * 0.4);
                 for (let i = startIndex; i < searchEndUnweighting; i++) {
                     if (accelerationData[i] < minAccel) {
                         minAccel = accelerationData[i];
@@ -608,56 +604,37 @@
                     }
                 }
                 
-                // Find takeoff point (first point after unweighting where accel < threshold)
-                let takeoffIndex = -1;
+                // Find global minimum (likely during flight) - this is the most reliable takeoff indicator
+                let globalMinAccel = accelerationData[0];
+                let globalMinAccelIndex = 0;
                 
-                // Look for takeoff after unweighting
-                for (let i = minAccelIndex + 10; i < accelerationData.length; i++) {
-                    if (accelerationData[i] < TAKEOFF_THRESHOLD) {
+                for (let i = minAccelIndex + 5; i < accelerationData.length; i++) {
+                    if (accelerationData[i] < globalMinAccel) {
+                        globalMinAccel = accelerationData[i];
+                        globalMinAccelIndex = i;
+                    }
+                    
+                    // If we found a very low value and have gone far enough, we can break
+                    // This helps avoid detecting landing as the global minimum
+                    if (accelerationData[i] < 1 && i > minAccelIndex + 20) {
+                        break;
+                    }
+                }
+                
+                // Refine takeoff point - look for the point where acceleration starts to drop significantly
+                // This is a better estimate of the actual takeoff than the global minimum
+                let takeoffIndex = globalMinAccelIndex;
+                
+                // Look backward from global minimum to find when acceleration starts to drop
+                const TAKEOFF_THRESHOLD = 2; // m/s²
+                for (let i = globalMinAccelIndex; i > minAccelIndex + 5; i--) {
+                    if (accelerationData[i] > TAKEOFF_THRESHOLD) {
                         takeoffIndex = i;
                         break;
                     }
-                    
-                    // Safety check - if we go too far, break
-                    if (i > minAccelIndex + Math.floor(accelerationData.length * 0.3)) {
-                        break;
-                    }
                 }
                 
-                // If takeoff not found, use a reasonable estimate
-                if (takeoffIndex === -1) {
-                    takeoffIndex = Math.min(minAccelIndex + 30, accelerationData.length - 1);
-                }
-                
-                // Now find peak velocity between unweighting and takeoff
-                let peakVelocity = 0;
-                let peakVelocityIndex = 0;
-                
-                // Search for peak velocity in the concentric phase
-                const searchStartVelocity = minAccelIndex;
-                const searchEndVelocity = takeoffIndex;
-                
-                for (let i = searchStartVelocity; i < searchEndVelocity; i++) {
-                    if (i < velocityData.length && velocityData[i] > peakVelocity) {
-                        peakVelocity = velocityData[i];
-                        peakVelocityIndex = i;
-                    }
-                }
-                
-                // If no significant peak velocity found, log and fall back to whole signal search
-                if (peakVelocity < 0.5) {
-                    console.log("No significant peak velocity found in concentric phase");
-                    
-                    // Fall back to searching the whole signal
-                    for (let i = 0; i < velocityData.length; i++) {
-                        if (velocityData[i] > peakVelocity) {
-                            peakVelocity = velocityData[i];
-                            peakVelocityIndex = i;
-                        }
-                    }
-                }
-                
-                // For visualization, find a loading peak (concentric acceleration peak)
+                // Find concentric peak acceleration (loading peak)
                 let loadingPeakIndex = minAccelIndex;
                 let loadingPeakValue = accelerationData[minAccelIndex];
                 
@@ -665,6 +642,31 @@
                     if (accelerationData[i] > loadingPeakValue) {
                         loadingPeakValue = accelerationData[i];
                         loadingPeakIndex = i;
+                    }
+                }
+                
+                // Find peak velocity in the concentric phase (between unweighting and takeoff)
+                let peakVelocity = 0;
+                let peakVelocityIndex = 0;
+                
+                for (let i = minAccelIndex; i <= takeoffIndex; i++) {
+                    if (i < velocityData.length && velocityData[i] > peakVelocity) {
+                        peakVelocity = velocityData[i];
+                        peakVelocityIndex = i;
+                    }
+                }
+                
+                // Safety check - if peak velocity is very low, search the whole beginning segment
+                if (peakVelocity < 0.5) {
+                    console.log("No significant peak velocity found in concentric phase");
+                    
+                    // Fall back to searching the first half of the signal
+                    const fallbackSearchEnd = Math.floor(velocityData.length * 0.6);
+                    for (let i = 0; i < fallbackSearchEnd; i++) {
+                        if (velocityData[i] > peakVelocity) {
+                            peakVelocity = velocityData[i];
+                            peakVelocityIndex = i;
+                        }
                     }
                 }
                 
